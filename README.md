@@ -1,276 +1,251 @@
-# 🛡️ Projet de Sécurisation : Déploiement d'un WAF ModSecurity avec Apache sur Debian Server
+# 🛡️ Documentation Technique : Déploiement d'une Architecture WAF ModSecurity avec Apache sur Debian Server
 
 **Auteur :** Elif JAFFRES
 
 > [!NOTE]
-> Ce projet a été réalisé dans le cadre de mon apprentissage en cybersécurité et est documenté ici pour mon portfolio. 
-> L'objectif principal est de démontrer l'application des principes de **défense en profondeur**. J'ai pour cela déployé un pare-feu applicatif (WAF) en production pour protéger un serveur web, puis j'ai développé une application web volontairement vulnérable pour illustrer concrètement l'intérêt de cette protection face à des attaques réelles.
+> **Objectif du document** 
+> Ce rapport technique est intégré dans le cadre d'un portfolio en cybersécurité. Il formalise le processus de déploiement, de configuration et de validation d'un pare-feu applicatif web (WAF) visant à illustrer les principes de **défense en profondeur**.
 >
-> ⚠️ **Avertissement à but éducatif** : Toutes les techniques d'exploitation (Injections SQL, Bypass) documentées ci-dessous ont été réalisées dans un environnement de laboratoire strictement contrôlé et isolé.
+> Afin de valider l'efficience de la solution implémentée, une application web vulnérable (PoC) a été déployée, permettant la démonstration concrète d'attaques standardisées (Injections SQL) ainsi que leur mitigation.
+>
+> ⚠️ **Avertissement** : Le présent document traite de techniques d'exploitation (SQLi, Bypass). Celles-ci ont été générées au sein d'un environnement de laboratoire clos et contrôlé.
 
-Ce guide technique détaille, étape par étape, mon processus de réflexion, les commandes utilisées et les configurations appliquées pour mettre en place **ModSecurity** couplé à l'**OWASP Core Rule Set (CRS)** sur un serveur **Apache**.
+Cette notice détaille la méthodologie d'intégration robuste impliquant le module **ModSecurity** additionné à l'**OWASP Core Rule Set (CRS)** sous l'infrastructure d'un serveur **Apache**.
 
 ---
 
-##  1. Préparation de l'environnement de base
+## 🏗️ 1. Pré-requis et Durcissement (Hardening) de l'Environnement
 
-La première étape de toute politique de sécurité consiste à s'assurer que le système hôte est sain, à jour et restreint aux seuls services nécessaires. J'ai utilisé une machine virtuelle sous environnement Ubuntu/Debian.
+Le socle de toute politique sécuritaire repose sur la fiabilité de l'infrastructure d'hébergement. L'environnement Debian doit faire l'objet d'un durcissement préventif.
 
-### 1.1 Mise à jour du système d'exploitation
-Une règle d'or en administration système est de travailler sur un système où toutes les vulnérabilités publiques connues (CVE) sont patchées.
+### 1.1 Mise à jour et maintien du système
+L'atténuation des vulnérabilités connues (CVE) requiert l'application systématique des correctifs de sécurité fournis par les gestionnaires de paquets officiels.
 ```bash
-# Met à jour la liste des paquets disponibles puis installe les dernières versions
+# Actualisation des dépôts et mise à niveau non-interactive des paquets système
 sudo apt update && sudo apt upgrade -y
 ```
 ![Mise à jour et upgrade](images/sudoaptupdateupgrade.png)
 
-### 1.2 Installation et gestion du service Apache2
-J'ai choisi Apache comme serveur web (la pile logicielle sur laquelle le WAF viendra se greffer).
-
+### 1.2 Déploiement et sécurisation du daemon Apache2
+Le service HTTP/HTTPS constitue l'interface d'exposition principale. Son installation doit être validée et restreinte au seul périmètre nécessaire.
 ```bash
-# Installation du paquet serveur web Apache
+# Installation du service Apache
 sudo apt install apache2 -y
-```
 
-Une fois installé, il est crucial de s'assurer du bon fonctionnement du service et de l'activer pour qu'il démarre automatiquement à chaque redémarrage du serveur.
-```bash
-# Vérifie la version installée
+# Validation de la version installée
 apache2 -v
 
-# Active le démarrage automatique du service Apache
+# Déclaration d'Apache en tant que service de démarrage persistant
 sudo systemctl enable apache2
 
-# Vérifie l'état actuel du service (doit être "active (running)")
+# Vérification du statut du processus daemon
 sudo systemctl status apache2
 ```
 ![Status Apache](images/apachaeinstalledansstatus.png)
 ![Enable Apache](images/sudosystemctlenableapache2.png)
 
-### 1.3 Configuration du pare-feu avec UFW
-La sécurité réseau de base (filtrage de ports) est assurée par `UFW` (Uncomplicated Firewall), une surcouche simplifiée pour `iptables`. L'objectif ici est d'appliquer le principe du moindre privilège en n'ouvrant que les flux stricts : le web et l'administration distante.
-
+### 1.3 Paramétrage du filtrage réseau (UFW)
+Conformément au principe du **moindre privilège**, les flux réseaux non nécessaires doivent être bloqués. Le pare-feu système (UFW) a été paramétré afin de sceller la zone démilitarisée (DMZ).
 ```bash
-# Liste les profils d'applications connus par le pare-feu
+# Inventaire des profils applicatifs pris en charge
 sudo ufw app list
 
-# Autorise le trafic HTTP (port 80) et HTTPS (port 443) via le profil Apache
+# Autorisation exclusive des flux web (ports initiaux 80 et 443)
 sudo ufw allow 'Apache Full'
 
-# Autorise l'accès SSH (port 22) pour l'administration distante
+# Allocation restreinte du protocole d'administration à distance (port 22)
 sudo ufw allow 'OpenSSH'
 
-# Active le pare-feu système
+# Activation du filtrage dynamique UFW
 sudo ufw enable
 
-# Affiche l'état des règles actives
+# Validation de la matrice de filtrage
 sudo ufw status
 ```
 ![Configuration UFW](images/ufwconfig.png)
 
 ---
 
-## ⚙️ 2. Installation et paramétrage du moteur ModSecurity
+## ⚙️ 2. Déploiement et Configuration de ModSecurity
 
-ModSecurity agit comme un module intégré à Apache. Il inspecte à la volée tout le trafic HTTP entrant et sortant.
+ModSecurity opère au niveau de la couche applicative (Niveau 7 - modèle OSI) en s'intégrant au cœur d'Apache pour scruter l'intégrité de l'ensemble des transactions HTTP.
 
-### 2.1 Déploiement du module
-L'installation se fait directement depuis les dépôts officiels.
+### 2.1 Installation du module
+L'import du paquet `libapache2-mod-security2` installe le moteur d'analyse, lequel requiert ensuite une initialisation.
 ```bash
-# Installe le module ModSecurity pour Apache
+# Téléchargement et intégration des dépendances natives
 sudo apt install libapache2-mod-security2 -y
 
-# Force l'activation du module dans la configuration d'Apache
+# Activation du module au sein de l'arborescence Apache
 sudo a2enmod security2
 
-# Redémarre le service pour que le nouveau module soit pris en charge
+# Redémarrage du serveur pour exécution des nouveaux handlers
 sudo systemctl restart apache2
 ```
 ![Installation ModSecurity](images/installation-libapache2-mod-security2.png)
 
-### 2.2 Configuration principale du moteur
-ModSecurity est fourni avec un fichier de configuration recommandé contenant les bonnes pratiques de base. J'ai copié ce modèle pour créer ma configuration active.
-
+### 2.2 Audit et Configuration des directives critiques
+Une configuration minimale ou inappropriée exposerait la solution à de multiples lacunes. L'architecture a donc été structurée à partir du template recommandé :
 ```bash
-# Création du fichier de configuration à partir du modèle recommandé
+# Restructuration pour obtention d'une base de configuration opérationnelle
 sudo cp /etc/modsecurity/modsecurity.conf-recommended /etc/modsecurity/modsecurity.conf
 ```
 
-Dans ce fichier `/etc/modsecurity/modsecurity.conf`, plusieurs directives sont essentielles. Je les ai examinées et configurées avec soin :
-- **`SecRuleEngine DetectionOnly`** : Dans un premier temps, j'ai laissé le moteur en mode détection pure. Cela permet au WAF de journaliser les attaques sans bloquer les utilisateurs légitimes, le temps d'observer le trafic et d'éviter les "faux positifs".
-- **`SecAuditEngine On`** : Active la création de journaux d'audit complexes pour chaque transaction suspecte.
-- **`SecRequestBodyAccess On`** : Demande au WAF d'analyser le corps des requêtes POST (fichiers, formulaires JSON). C'est là que se cachent 90% des attaques web.
+Dans le fichier opérationnel `/etc/modsecurity/modsecurity.conf`, une révision des paramètres suivants a été opérée :
+- **`SecRuleEngine DetectionOnly`** : Positionnement en mode de pure observation (monitoring). Le trafic est analysé et journalisé de façon passive, empêchant les blocages intempestifs le temps de calibrer la solution (diminution du taux de faux positifs).
+- **`SecAuditEngine On`** : Enregistrement forensique exhaustif des événements déviants.
+- **`SecRequestBodyAccess On`** : Directive impérative garantissant l'analyse des corps de requêtes POST (données XML, JSON ou formulaires), vecteur majeur de l'exploitation web applicative.
 
 ![Configuration ModSecurity](images/modsecurity-conf.png)
 
 ---
 
-##  3. Intégration de l'OWASP Core Rule Set (CRS)
+## 🧠 3. Déploiement Stratégique de l'OWASP Core Rule Set (CRS)
 
-ModSecurity sans règles, c'est comme un antivirus sans base de signatures. L'**OWASP CRS** est l'intelligence du système, un ensemble de règles génériques conçues pour contrer le Top 10 des vulnérabilités web (SQLi, XSS, Path Traversal...).
+Un pare-feu WAF dépourvu de contexte est une coquille vide. L'intégration de la bibliothèque de menaces ouverte **OWASP CRS** octroie au moteur les algorithmes permettant de détecter les vecteurs d'attaque courants (OWASP Top 10).
 
-### 3.1 Téléchargement et structuration
-Plutôt que d'utiliser des paquets obsolètes, j'ai récupéré la dernière version stable (v4.18.0) directement depuis le dépôt officiel.
-
+### 3.1 Clônage des signatures de sécurité
+L'intégrité du CRS est garantie par le clonage des paquets identifiés comme stables sur le référentiel github officiel.
 ```bash
-# Définition de la variable de version
+# Fixation du tag cible 
 VERSION="v4.18.0" 
 
-# Navigation dans le répertoire temporaire
+# Déplacement procédural
 cd /tmp
 
-# Téléchargement de l'archive tar.gz du CRS
+# Récupération de l'archive tarball officielle
 wget "https://github.com/coreruleset/coreruleset/archive/refs/tags/${VERSION}.tar.gz"
 
-# Extraction de l'archive
+# Dépressurisation et archivage structuré des signatures
 tar -xzvf ${VERSION}.tar.gz
-
-# Déplacement de l'archive extraite dans le dossier de configuration d'Apache
 sudo mv coreruleset-${VERSION/v/} /etc/apache2/modsecurity-crs
 ```
 
-### 3.2 Définition de la stratégie de sécurité (crs-setup.conf)
-Le CRS utilise un fichier de configuration dédié pour définir son agressivité, appelé **Niveau de Paranoïa (Paranoia Level - PL)**.
-
+### 3.2 Modélisation du niveau de paranoïa (Paranoia Level)
+La mise en place procède par l'ajustement structurel des matrices de danger à travers le fichier de réglage natif :
 ```bash
 cd /etc/apache2/modsecurity-crs
-# Création du fichier de configuration CRS actif
 sudo cp crs-setup.conf.example crs-setup.conf
 ```
 
-J'ai édité ce fichier pour ajuster les comportements critiques :
-1. **L'action par défaut (`SecDefaultAction`)** : J'ai confirmé la politique de l'Anomaly Scoring. Les requêtes sont évaluées, leur score de dangerosité s'accumule, et si le seuil est franchi, la requête est bloquée. 
+Plusieurs directives internes (`crs-setup.conf`) ont été adaptées :
+1. **L'action de remédiation par défaut (`SecDefaultAction`)** : Le modèle sélectionné est l'Anomaly Scoring. Les charges suspectes sont comptabilisées ; si le cumul dépasse un seuil d'anomalie critique, le traitement logique entrainera la défaillance forcée (Code HTTP 403).
 ![CRS Setup SecDefaultAction](images/crssetupconf-secdefaultaction-reglage.png)
 ![Changement vers log](images/secdefaultaction-chnageto-log.png)
 
-2. **Le Paranoia Level (`SecAction id:900000`)** : J'ai activé le PL1, qui est la protection de base contre les attaques flagrantes, garantissant presque aucun faux positif sur un site standard.
+2. **Le Paranoia Level (`SecAction id:900000`)** : Fixation du profil sur `PL1`, seuil garantissant un ratio optimal entre détection d'intrusions confirmées et souplesse opérationnelle.
 ![SecAction 900000 Paranoia Level](images/secaction-90000-active.png)
 
-3. **La version du setup (`SecAction id:900990`)** : J'ai décommenté l'activation de la version du CRS (4.18.0) pour que le moteur sache quel ensemble de variables utiliser.
+3. **Intégration d'historique de version (`SecAction id:900990`)** : Déclaration absolue de la version 4.18.0, condition requise pour l'évaluation de certains sets de règles sémantiques.
 ![SecAction 900990 Setup Version](images/secaction-990-active.png)
 
-### 3.3 Liaison du CRS avec Apache
-Il faut ensuite indiquer à Apache de charger ces nouvelles règles OWASP. J'ai ajouté ces directives dans le fichier `/etc/apache2/mods-enabled/security2.conf` :
-
+### 3.3 Inclusion des bibliothèques dans l'instance Apache
+L'acheminement des requêtes vers le flux d'analyse de règles passe par la configuration spécifique du module `security2.conf` situé dans le répertoire `mods-enabled/` :
 ![Configuration security2.conf](images/securty2conf-corrected.png)
-*Cette capture montre l'inclusion de `crs-setup.conf` en premier lieu, suivi du dossier contenant les règles `rules/*.conf`.*
 
-### 3.4 Adaptation aux contraintes matérielles (Bypass IP Strict)
-Comme je travaille sur un environnement de test local (machine virtuelle) sans nom de domaine qualifié (FQDN), j'attaquais mon serveur via son adresse IP directe. Cependant, le CRS bloque par défaut ce comportement pour éviter l'énumération par des bots scanneurs.
+### 3.4 Tuning préliminaire et levée des limitations strictes
+En environnement de test de type Proof of Concept (PoC) ne disposant pas d'un système DNS formel, l'interrogation par adresse IPv4 stricte provoque un blocage anticipé dû à la règle CRS anti-reconnaissance.
 
-J'ai donc dû éditer la règle spécifique **`REQUEST-920-PROTOCOL-ENFORCEMENT.conf`** :
+Le fichier `/etc/apache2/modsecurity-crs/rules/REQUEST-920-PROTOCOL-ENFORCEMENT.conf` a été l'objet d'une bascule conditionnelle.
 ![Accès via IP bloqué](images/ipvirtualmachine.png)
-J'ai remplacé l'action `block` par `pass` au niveau de la règle `920350` ("Host header is a numeric IP address") afin d'autoriser mon trafic de test local.
+Pour la règle d'inspection `id:920350`, l'instruction `block` a muté en `pass`, de manière à assurer la continuité des tests en adresse locale IP brute.
 ![Edition règle Protocol Enforcement](images/secrule-edit-protocol-enforcement.png)
 
 ---
 
-##  4. Vérification et Simulation d'attaques
+## 🎯 4. Contrôles Qualité et Audit d'Infrastructure
 
-Afin de confirmer que ma protection fonctionnait correctement (après avoir basculé le `SecRuleEngine` sur `On` pour bloquer les menaces), j'ai effectué une série de tests intrusifs.
+Suite à la bascule temporelle du paramètre `SecRuleEngine` sur le profil strict `On`, un banc de test opérationnel a pris lieu afin d'apprécier la capacité d'élision du WAF.
 
-### 4.1 Contrôle de syntaxe
-Toujours valider la configuration d'Apache avant un rechargement pour éviter un crash du serveur en production :
+### 4.1 Diagnostic syntaxique des directives
+La validation à chaud est précédée par une vérification sèche de l'ordonnancement de code :
 ```bash
-# Vérifie la syntaxe des fichiers de conf Apache
+# Vérification d'absence de corruption dans l'arborescence des paramètres
 sudo apache2ctl configtest
 
-# Redémarre Apache si "Syntax OK" est retourné
+# Ré-initialisation ordonnée face au label "Syntax OK"
 sudo systemctl restart apache2
 ```
 ![Apache Config Test](images/apache2ctl-configtest.png)
 
-### 4.2 Lancement de charges utiles (Payloads)
-J'ai simulé des attaques courantes via l'outil système `curl` (qui permet de faire des requêtes HTTP personnalisées en ligne de commande). Le but était d'obtenir une réponse HTTP de blocage formel (**`403 Forbidden`**).
+### 4.2 Injection de payloads intrusifs
+L'évaluation s'est organisée à l'aide d'interactions manuelles via la commande `curl`, forgeant formellement plusieurs natures d'attaques pour valider le rempart défensif (Code 403 Forbidden escompté).
 
-* **Test de Path Traversal (Exploration d'arborescence non autorisée)** :
+* **Test n°1 : Exfiltration et Path Traversal (CWE-22)**
   ```bash
   curl -i "http://<mon_ip>/?exec=/etc/passwd"
   ```
-  Le serveur bloque instantanément la tentative de lecture de fichiers systèmes.
+  Interception et interruption validées lors de la tentative de franchissement d'arborescence pour l'accès aux variables globales linux.
   ![Test Path Traversal](images/test-pathtraversal.png)
 
-* **Test d'Injection SQL (Contournement de logique de base de données)** :
-  J'ai envoyé un paramètre manipulé de façon à tromper une requête SQL.
-  Résultat : Rejet immédiat par le WAF avec la page `403 Forbidden` standard d'Apache.
+* **Test n°2 : Manipulation et Injection SQL (CWE-89)**
+  Apprêtage et lancement d'un paramétrage d'url malicieux tentant l'altération de logique de base de données (Bypass type Tautologies). Le filtrage confirme la neutralisation.
   ![Injection Rejetée](images/injection-rejected.png)
 
 ---
 
-##  5. Maîtrise de la journalisation et analyse Forensique
+## 📊 5. Supervision et Exploitation des Logs (SOC/Forensic)
 
-En cybersécurité, bloquer c'est bien, comprendre c'est mieux. L'analyse des journaux (logs) permet de faire de la *Threat Intelligence* et d'ajuster finement le pare-feu.
+La compréhension systémique et granulaire offerte par l'étude des éléments journalisés constitue un rempart essentiel aux actions de remédiations postérieures.
 
-### 5.1 Les deux logs essentiels
-Je surveillais simultanément deux flux d'informations :
-1. **Le "Signal" (`error.log`)** : Indique de manière concise qu'un incident a eu lieu, son type, et fournit un identifiant unique de transaction. J'utilise `tail -f` pour lire le journal en direct.
+### 5.1 Séparation des processus de Journalisation
+L'architecture sépare en deux canaux les logs WAF :
+1. **L'alerte d'Incident (`error.log`)** : Formatée spécifiquement pour lever des drapeaux de signalisation auprès de SIEM externes. Ce journal intègre instantanément les ID uniques caractérisant les incidents détectés.
    ![Log Error Apache](images/injection-log-final.png)
 
-2. **Le "Contexte complet" (`modsec_audit.log`)** : Une fois l'identifiant repéré, j'examine l'audit complet du WAF. Il détaille l'empreinte réseau, l'entête HTTP exact de l'attaquant, le corps de la requête, et précisément quelles règles du CRS ont "matché".
-   J'ai documenté ici plusieurs étapes d'analyse de mes fichiers de logs :
+2. **L'empreinte Forensic (`modsec_audit.log`)** : Base de données détaillée restituant l'empreinte complète d'un incident isolé. Son contenu permet aux analystes d'isoler l'en-tête de contamination et la charge (payload) du tiers malveillant, exposant quelles identités de l'OWASP CRS ont déjoué la transaction.
+
+   Représentations concrètes d'une enquête contextuelle sous audit :
    ![Log Audit ModSecurity 1](images/logtest1.png)
    ![Log Audit ModSecurity 2](images/logtest2.png)
    ![Log Audit ModSecurity 3](images/logtest3.png)
    ![Audit Log Détail 3 (Gros plan)](images/audotlogapprofondiedetest3.png)
    ![Log Audit ModSecurity 4](images/logtest4.png)
 
-### 5.2 Création de règles d'exclusion personnalisées (Tuning)
-Durant mes expériences, la mise en place d'un WAF a pu créer de rares cas où une requête légitime était considérée comme malveillante (Faux Positif). Plutôt que de désactiver la sécurité entière, j'ai créé un fichier d'exclusion pour affiner le chirurgien :
-
+### 5.2 Calibrage par exclusion (Virtual Patching)
+Dans un cadre de mise en production continue, la préservation des conditions opérationnelles et l'abolition des faux positifs sont prioritaires. Face à l'interruption présumée d'un service légitime, une exclusion ponctuelle et ciblée doit être privilégiée à l'abaissement global de la sécurité.
 ```bash
-# Création d'un fichier d'exclusion lu avant les règles principales
+# Allocation du document de configuration gérant l'overriding des règles CRS
 sudo touch /etc/apache2/modsecurity-crs/rules/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf
 ```
-À l'intérieur, j'ai utilisé la directive `SecRuleRemoveById` pour désactiver des identifiants de règles très précis, uniquement sur certains périmètres, afin de fluidifier l'expérience utilisateur tout en maintenant la sécurité maximale.
+L'utilisation de la directive déclarative `SecRuleRemoveById` a permis une exception sémiotique pour calibrer rigoureusement la surface d'analyse, tout en préservant le traitement global continu.
 ![Règles d'exclusion](images/exclutionrules.png)
 
 ---
 
-##  6. Démonstration pratique : Sécurisation d'une Application PHP/MariaDB Vulnérable
+## 💥 6. Déploiement Opérationnel d'un PoC : Vulnérabilités PHP/MariaDB
 
-Pour prouver concrètement la valeur de cette infrastructure, j'ai codé de toutes pièces un site d'authentification présentant une faille critique.
+Dans une optique de démonstration totale des capacités défensives du déploiement ModSecurity, un squelette d'application non structuré (ne présentant aucune précaution de développement) a été instauré. 
 
-### 6.1 Installation de la pile LAMP
-J'ai complété mon serveur Apache par le moteur d'exécution PHP et une base de données MariaDB.
+### 6.1 Intégration matérielle de la pile logicielle
+Mise sur pied d'une stack LAMP avec exécution de variables globales non sanitaires.
 ```bash
-# Installation de MariaDB, PHP et des ponts de communication
+# Fourniture des ponts d'interconnexion pour support back-end PHP/SQL
 sudo apt install mariadb-server php php-mysqli
 ```
-
-Ensuite, depuis la console SQL (`sudo mariadb`), j'ai structuré la base de données : création de la table `utilisateurs`, d'un compte `lab_user` restreint à cette seule base (principe du moindre privilège), et d'un faux utilisateur de test `admin`.
+L'application des règles logiques a encadré la conception d'un espace applicatif (`lab_secu_db`), limité par définition de rôle d'utilisateur confiné en base.
 ![Création de l'utilisateur MariaDB](images/maridbcreateduser.png)
 
-### 6.2 Développement du code vulnérable (CWE-89)
-J'ai conçu un script d'authentification `index.php`. L'application est **intentionnellement vulnérable** car elle concatène la saisie utilisateur brute directement au sein de la syntaxe SQL, offrant une surface d'attaque directe sur le moteur de la base de données (absence de requêtes préparées `prepare()`).
-
-Voici la vue du code et de l'interface en production :
+### 6.2 Démonstration de codage faillible
+L'instanciation de `index.php` simule un environnement dégradé par principe : la saisie cliente subit une concaténation brute dirigée explicitement vers le parseur de la base (`mysqli_query`), provoquant structurellement une Injection SQL critique.
 ![Code source index.php](images/indexphp.png)
 ![Vue Frontend ModSecurity](images/indexphpfronend-navigateur.png)
 
-### 6.3 Exploitation des failles (Avant activation du WAF)
+### 6.3 Exploitation des vecteurs d'attaque (WAF inactif)
+Avant d'établir l'opérabilité du WAF, la faisabilité mathématique et logique de l'outil malveillant a été isolée en deux tests disctincts de Compromission de Données (Data Breach).
 
-J'ai simulé le rôle d'un attaquant pour exploiter mon propre code vulnérable.
-
-**A. Bypass de l'Authentification (Contournement classique)**
-Dans le formulaire web, j'ai injecté ce payload dans le nom d'utilisateur : `' OR 1=1 -- -`
+**Scénario 1 : Contournement Logique d'Evaluation (Authentication Bypass)**
+Fourniture de la chaîne ` ' OR 1=1 -- - `  en condition `WHERE`. La tautologie force une validation "Vraie", menant à la connexion automatique sur un profil d'administration, sans disposition du mot de passe.
 <img width="537" height="353" alt="image" src="https://github.com/user-attachments/assets/26b5be62-cb31-45cc-8bd1-f514ab89136a" />
 
-*L'explication derrière l'attaque :*
-Le script PHP construit cette requête : `SELECT * FROM utilisateurs WHERE username = '' OR '1'='1' AND password = '...'`
-La condition `1=1` étant une vérité mathématique absolue résolue par la base de données, la vérification du mot de passe est annulée par les commentaires SQL (`--`). Je me connecte ainsi automatiquement au premier compte de la base de données, qui s'avère être généralement l'Administrateur !
-
-**B. Attaque avancée par l'opérateur UNION (Exfiltration de données)**
-Une fois le bypass maitrisé, j'ai automatisé une attaque plus dangereuse via `curl`. L'objectif était de forcer la base de données à me cracher les mots de passe hachés des autres utilisateurs !
-L'opérateur SQL `UNION` permet d'attacher un deuxième tableau de résultats à la requête d'origine. Puisque ma table utilisateurs avait 3 colonnes, j'ai fait une requête avec 3 arguments factices `SELECT 1, password, 3` :
-
+**Scénario 2 : Usurpation Vectorielle Structurelle (UNION Attack)**
+Établissement par script d'une requête automatisée `curl` conçue pour extraire en clair des données sensibles hachées issues de tables non adressées. Le principe consiste à étendre l'affichage de valeurs factices (`1, password, 3`) corrélées à l'arborescence requise.
 ```bash
+# Exemple de payload formaté afin de compromettre la confidentialité absolue du système ciblé
 curl -s -X POST http://localhost/index.php \
      -d "log_username=personne' UNION SELECT 1, password, 3 FROM utilisateurs WHERE username='admin' #" \
      -d "log_password=nimportequoi" \
      -d "login=Connexion" | grep "Connexion RÉUSSIE"
 ```
-Une fois le composant ModSecurity activé en mode blocage (`SecRuleEngine On`), ces deux redoutables types d'attaques sont instantanément stoppés, prouvant la puissance d'une solution de virtual-patching.
 
----
-
-> **Conclusion:** 
-> L'accomplissement de ce projet m'a conféré une vision holistique (globale) de la sécurisation des architectures applicatives. Des paramétrages système de pare-feu réseau, à l'analyse experte de journaux d'audit, jusqu'à la création et exploitation directe d'une faille web OWASP, je maîtrise désormais le cycle de vie complet garantissant l'intégrité et la disponibilité d'une application face à des acteurs malveillants.
+La consécration de l'architecture prend effet en fermant la brèche grâce au placement de la valeur paramétrique **`SecRuleEngine On`**. Lors du test, l'OWASP CRS réagit et absorbe l'attaque (par analyse du pattern sémantique), validant instantanément les stratégies de **défense en profondeur**.
