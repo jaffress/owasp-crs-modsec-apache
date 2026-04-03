@@ -8,13 +8,13 @@
 >
 > Afin de valider l'efficience de la solution implémentée, une application web vulnérable (PoC) a été déployée, permettant la démonstration concrète d'attaques standardisées (Injections SQL) ainsi que leur mitigation.
 >
-> ⚠️ **Avertissement** : Le présent document traite de techniques d'exploitation (SQLi, Bypass). Celles-ci ont été générées au sein d'un environnement de laboratoire clos et contrôlé.
+>  **Avertissement** : Le présent document traite de techniques d'exploitation (SQLi, Bypass). Celles-ci ont été générées au sein d'un environnement de laboratoire clos et contrôlé.
 
 Cette notice détaille la méthodologie d'intégration robuste impliquant le module **ModSecurity** additionné à l'**OWASP Core Rule Set (CRS)** sous l'infrastructure d'un serveur **Apache**.
 
 ---
 
-## 🏗️ 1. Pré-requis et Durcissement (Hardening) de l'Environnement
+##  1. Pré-requis et Durcissement (Hardening) de l'Environnement
 
 Le socle de toute politique sécuritaire repose sur la fiabilité de l'infrastructure d'hébergement. L'environnement Debian doit faire l'objet d'un durcissement préventif.
 
@@ -100,7 +100,7 @@ Dans le fichier opérationnel `/etc/modsecurity/modsecurity.conf`, une révision
 
 ---
 
-## 🧠 3. Déploiement Stratégique de l'OWASP Core Rule Set (CRS)
+## 3. Déploiement Stratégique de l'OWASP Core Rule Set (CRS)
 
 Un pare-feu WAF dépourvu de contexte est une coquille vide. L'intégration de la bibliothèque de menaces ouverte **OWASP CRS** octroie au moteur les algorithmes permettant de détecter les vecteurs d'attaque courants (OWASP Top 10).
 
@@ -153,7 +153,7 @@ Pour la règle d'inspection `id:920350`, l'instruction `block` a muté en `pass`
 
 ---
 
-## 🎯 4. Contrôles Qualité et Audit d'Infrastructure
+##  4. Contrôles Qualité et Audit d'Infrastructure
 
 Suite à la bascule temporelle du paramètre `SecRuleEngine` sur le profil strict `On`, un banc de test opérationnel a pris lieu afin d'apprécier la capacité d'élision du WAF.
 
@@ -184,7 +184,7 @@ L'évaluation s'est organisée à l'aide d'interactions manuelles via la command
 
 ---
 
-## 📊 5. Supervision et Exploitation des Logs (SOC/Forensic)
+##  5. Supervision et Exploitation des Logs (SOC/Forensic)
 
 La compréhension systémique et granulaire offerte par l'étude des éléments journalisés constitue un rempart essentiel aux actions de remédiations postérieures.
 
@@ -213,7 +213,7 @@ L'utilisation de la directive déclarative `SecRuleRemoveById` a permis une exce
 
 ---
 
-## 💥 6. Déploiement Opérationnel d'un PoC : Vulnérabilités PHP/MariaDB
+##  6. Déploiement Opérationnel d'un PoC : Vulnérabilités PHP/MariaDB
 
 Dans une optique de démonstration totale des capacités défensives du déploiement ModSecurity, un squelette d'application non structuré (ne présentant aucune précaution de développement) a été instauré. 
 
